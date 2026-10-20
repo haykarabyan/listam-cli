@@ -421,9 +421,14 @@ class Poster:
             return {"status": "published", "id": m.group(1), "url": final_url}
         for tab in ("moderation", "active"):
             ad = next((a for a in self.my_ads(tab) if a["title"] == spec.get("title")), None)
+            if ad and tab == "moderation":
+                # In review: no public page yet (/item/<id> is 404) and list.am offers no
+                # actions until moderation finishes; /mym/<id> is the owner's view.
+                return {"status": "in review", "id": ad["id"], "url": ad["edit_url"],
+                        "note": "list.am reviews new ads before they go public; it cannot be edited or "
+                                "deleted until then. Check `listam my --tab active`."}
             if ad:
-                return {"status": "in review" if tab == "moderation" else "published", "id": ad["id"],
-                        "url": f"https://www.list.am/en/item/{ad['id']}"}
+                return {"status": "published", "id": ad["id"], "url": f"https://www.list.am/en/item/{ad['id']}"}
         # Anything else (e.g. a promotion/payment page) is reported, never acted on.
         return {"status": "unknown", "step": current_step(resp.text), "url": final_url,
                 "note": "posted, but the ad was not found in your active/review lists yet; check `listam my`"}
@@ -447,6 +452,8 @@ class Poster:
 
     def delete(self, ad: dict[str, Any]) -> None:
         if not ad.get("_delete"):
+            if ad.get("status") == "moderation":
+                raise ListamError(f"ad {ad['id']} is in review; list.am allows deleting it only after moderation")
             raise ListamError(f"ad {ad['id']} has no delete action")
         self.http.post(ad["_delete"], data=[("_form_action", ""), ("form0_form_visited", "1")],
                        headers={"X-Requested-With": "XMLHttpRequest", "Referer": self.http.page_url("/my")})

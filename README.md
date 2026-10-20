@@ -137,8 +137,9 @@ An ad spec is JSON; values may be option names or ids:
 - **Safety**: paid promotions are never selected, publishing asks for confirmation (`--yes` skips it), and a
   cancelled publish deletes the draft list.am creates during preview.
 - **Photos**: JPEG up to 16 MB, or install `listam-cli[photos]` (Pillow) to convert and resize to 1280×960.
+- **Review**: list.am reviews new ads before they go public. Until then the ad sits in `listam my --tab moderation`,
+  has no public page, and cannot be edited or deleted (the website offers no actions either).
 - **Not supported yet**: categories whose form loads fields dynamically (car listings), and editing existing ads.
-  Drafts and the preview step are tested end to end; the final publish click has not been exercised yet.
 
 ## Using with AI agents
 

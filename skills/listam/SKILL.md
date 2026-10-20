@@ -141,6 +141,7 @@ checks the session; exit code 4 means not logged in.
    Only publish (`listam post spec.json`) when the user explicitly asks; it shows a summary and asks y/N on the
    terminal. Never pass `--yes` unless the user explicitly asked to publish without confirmation.
 4. `listam my --tab drafts|active|moderation` shows the result; `listam delete <id>` removes an ad (ask first).
+   Published ads go to review first (status "in review"); they cannot be deleted until review finishes.
 
 The CLI never selects paid promotions. Car listings (dynamic forms) are not supported; it says so.
 
