@@ -258,12 +258,14 @@ def parse_item(html: str, item_id: str, known_labels: set[str] | None = None) ->
         if k and v:
             attributes[k] = v
     # Icon tiles (electronics, cars, real estate). One-line tiles are features
-    # such as "Heated seats" or "Concierge".
+    # such as "Heated seats" or "Concierge"; ones the listing lacks are greyed
+    # out with a "disabled" class.
     features: list[str] = []
     for tile in tree.css(".at3"):
         ps = [t for t in (_text(p) for p in tile.css(".attr-info-wraper p")) if t]
         if len(ps) == 1:
-            features.append(ps[0])
+            if "disabled" not in (tile.attributes.get("class") or "").split():
+                features.append(ps[0])
         elif len(ps) >= 2:
             key, value = _orient_tile(ps[0], ps[1], known_labels)
             attributes.setdefault(key, value)

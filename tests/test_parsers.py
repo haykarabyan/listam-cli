@@ -169,6 +169,16 @@ def test_item_tiles_oriented_by_known_labels():
     assert d["seller"]["name"] == "Example Seller"
 
 
+def test_item_skips_disabled_features():
+    # list.am renders every comfort option and greys out the missing ones.
+    html = read("item_car.html")
+    for name in ("Heated steering wheel", "Cruise control"):
+        tile = html.rindex('class="at3"', 0, html.index(f">{name}<"))
+        html = html[:tile] + 'class="at3 disabled"' + html[tile + len('class="at3"'):]
+    d = parsers.parse_item(html, "995182429", known_labels=CAR_LABELS)
+    assert d["features"] == ["Air conditioner", "Heated seats", "Ventilated seats", "Tinted windows"]
+
+
 @pytest.mark.parametrize(
     "first, second, key",
     [("16 GB", "Memory (RAM)", "Memory (RAM)"), ("Condition", "Used", "Condition"),
