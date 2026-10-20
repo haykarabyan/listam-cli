@@ -1,6 +1,6 @@
 ---
 name: listam
-description: Search list.am (Armenia's main classifieds site) via the `listam` CLI — find car spare parts or any other listings, inspect photos, specs and vehicle fitment, and get seller phone numbers (plus Viber/WhatsApp) so the user can call to clarify details. Use when the user wants to buy/find something on list.am, compare offers, or contact a seller.
+description: Search list.am (Armenia's main classifieds site) via the `listam` CLI — find car spare parts or any other listings, inspect photos, specs and vehicle fitment, get seller phone numbers (plus Viber/WhatsApp), and draft or post the user's own ads. Use when the user wants to buy/find something on list.am, compare offers, contact a seller, or sell something.
 ---
 
 # list.am via the `listam` CLI
@@ -128,3 +128,19 @@ Sellers don't always fill in structured fields, so also run a text search (e.g. 
 
 `--page N` starts at page N, `--pages K` fetches K pages and merges them. JSON includes `has_next_page` and `next_page`.
 A page holds ~100 cards. Note `has_next_page` can be true even when `total_matches` is small (extra pages are "similar").
+
+## Posting the user's ads
+
+Requires `listam login` (the user runs it themselves; never ask for or handle their password). `listam whoami`
+checks the session; exit code 4 means not logged in.
+
+1. Find the leaf category (`listam categories …`), then `listam post-form <id> --template` for a spec skeleton and
+   `listam post-form <id> --name <field>` for a field's full option list. Errors name the sub-category to use.
+2. Write the spec JSON (see the template's `_help`), then `listam post spec.json --dry-run` until it validates.
+3. Default to `listam post spec.json --draft` and tell the user the draft is ready to review on list.am or publish.
+   Only publish (`listam post spec.json`) when the user explicitly asks; it shows a summary and asks y/N on the
+   terminal. Never pass `--yes` unless the user explicitly asked to publish without confirmation.
+4. `listam my --tab drafts|active|moderation` shows the result; `listam delete <id>` removes an ad (ask first).
+
+The CLI never selects paid promotions. Car listings (dynamic forms) are not supported; it says so.
+

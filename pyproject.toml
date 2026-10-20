@@ -20,6 +20,10 @@ dependencies = [
     "selectolax>=1.0",
 ]
 
+[project.optional-dependencies]
+# Resize/convert photos for `listam post` (otherwise only JPEGs up to 16 MB are accepted).
+photos = ["pillow>=10"]
+
 [project.urls]
 Homepage = "https://github.com/haykarabyan/listam-cli"
 Issues = "https://github.com/haykarabyan/listam-cli/issues"

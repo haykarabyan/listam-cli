@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from curl_cffi import requests
+from curl_cffi import CurlMime, requests
 
 BASE_URL = "https://www.list.am"
 IMAGE_HOST = "https://img.list.am"
@@ -60,16 +60,45 @@ class Http:
         return BASE_URL + LANG_PREFIX[self.lang] + path
 
     def get(self, url: str, params: dict[str, Any] | None = None, headers: dict[str, str] | None = None) -> requests.Response:
+        return self.request("GET", url, params=params, headers=headers)
+
+    def post(
+        self,
+        url: str,
+        data: dict[str, Any] | list[tuple[str, Any]] | None = None,
+        files: dict[str, tuple[str, bytes, str]] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> requests.Response:
+        """POST a form (multipart when `files` = {field: (filename, bytes, type)}). Only retried when Cloudflare blocked it before it reached
+        list.am; any other failure may already have been processed (e.g. an ad
+        submitted), so it is surfaced instead of repeated."""
+        if not files:
+            return self.request("POST", url, data=data, headers=headers)
+        # curl_cffi takes multipart bodies as CurlMime; plain fields go in as parts too.
+        mime = CurlMime()
+        for name, value in (data.items() if isinstance(data, dict) else (data or [])):
+            mime.addpart(name=name, data=str(value).encode())
+        for name, (filename, content, ctype) in files.items():
+            mime.addpart(name=name, filename=filename, content_type=ctype, data=content)
+        try:
+            return self.request("POST", url, multipart=mime, headers=headers)
+        finally:
+            mime.close()
+
+    def request(self, method: str, url: str, **kw: Any) -> requests.Response:
         if not url.startswith("http"):
             url = BASE_URL + url
+        idempotent = method == "GET"
         last_err: str = ""
         for attempt in range(self.retries):
             wait = self.delay - (time.monotonic() - self._last)
             if wait > 0:
                 time.sleep(wait)
             try:
-                resp = self.session.get(url, params=params, headers=headers, timeout=self.timeout)
+                resp = self.session.request(method, url, timeout=self.timeout, **kw)
             except requests.RequestsError as e:
+                if not idempotent:
+                    raise ListamError(f"{method} {url} failed and was not retried (it may have gone through): {e}") from None
                 last_err = str(e)
                 time.sleep(1.5 * (attempt + 1))
                 continue
@@ -77,12 +106,12 @@ class Http:
                 self._last = time.monotonic()
             if resp.status_code == 404:
                 raise NotFound(f"not found: {resp.url}")
-            if resp.status_code in _RETRY_STATUSES:
+            if resp.status_code in _RETRY_STATUSES and (idempotent or _is_challenge(resp)):
                 last_err = "Cloudflare challenge" if _is_challenge(resp) else f"HTTP {resp.status_code}"
                 time.sleep(2.0 * (attempt + 1))
                 continue
             if resp.status_code >= 400:
-                raise ListamError(f"HTTP {resp.status_code} for {resp.url}")
+                raise ListamError(f"HTTP {resp.status_code} for {method} {resp.url}")
             return resp
         if last_err == "Cloudflare challenge":
             raise Blocked(f"blocked by Cloudflare at {url}; wait a few minutes and retry")

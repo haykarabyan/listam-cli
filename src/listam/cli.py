@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
 
-from . import __version__
+from . import __version__, auth
 from .client import PARTS_CATEGORY, Listam
-from .http import ListamError
+from .http import ListamError, NotFound
 
 EPILOG = """\
 examples:
@@ -25,7 +27,7 @@ examples:
   listam filters 62 --name n      # every filter (query param) of a category
 
 Output is JSON (pretty in a terminal, compact when piped). Exit codes:
-0 ok, 1 error, 2 not found, 3 blocked by Cloudflare.
+0 ok, 1 error, 2 not found, 3 blocked by Cloudflare, 4 not logged in.
 """
 
 
@@ -159,6 +161,114 @@ def cmd_models(api: Listam, a: argparse.Namespace) -> Any:
     return api.models(a.make, a.category)
 
 
+def _secret(prompt: str, from_stdin: bool, env: str) -> str:
+    if from_stdin:
+        return sys.stdin.readline().rstrip("\n")
+    if os.environ.get(env):
+        return os.environ[env]
+    if not sys.stdin.isatty():
+        raise ListamError(f"no terminal to prompt on; use --password-stdin or set {env}")
+    return getpass.getpass(prompt)
+
+
+def cmd_login(api: Listam, a: argparse.Namespace) -> Any:
+    http = api.http
+    if a.cookies:
+        header = _secret("Paste the Cookie header (hidden): ", a.password_stdin, "LISTAM_COOKIES")
+        auth.login_with_cookie_header(http, header)
+    else:
+        user = a.user or os.environ.get("LISTAM_USER")
+        if not user:
+            if not sys.stdin.isatty():
+                raise ListamError("pass --user or set LISTAM_USER")
+            user = input("Phone number or email: ").strip()
+        password = _secret("Password (hidden): ", a.password_stdin, "LISTAM_PASSWORD")
+        auth.login_with_password(http, user, password)
+    path = auth.save_session(http)
+    return {"logged_in": True, "session_file": str(path)}
+
+
+def cmd_logout(api: Listam, a: argparse.Namespace) -> Any:
+    return {"logged_in": False, "session_removed": auth.clear_session()}
+
+
+def cmd_whoami(api: Listam, a: argparse.Namespace) -> Any:
+    has_session = auth.load_session(api.http)
+    logged_in = has_session and auth.is_logged_in(api.http)
+    return {"logged_in": logged_in, "session_file": str(auth.session_path()) if has_session else None}
+
+
+def _ask(question: str) -> bool:
+    """Prompt on the terminal even when stdin carries the ad spec."""
+    try:
+        with open("/dev/tty", "r+") as tty:
+            tty.write(question)
+            tty.flush()
+            return tty.readline().strip().lower() in ("y", "yes")
+    except OSError:
+        raise ListamError("no terminal to confirm on; pass --yes to publish without a prompt") from None
+
+
+def _confirm_publish(summary: dict) -> bool:
+    lines = ["", "About to PUBLISH this ad on list.am (no paid promotion):"]
+    lines += [f"  {k}: {', '.join(v) if isinstance(v, list) else v}" for k, v in summary.items()]
+    print("\n".join(lines), file=sys.stderr)
+    return _ask("Publish? [y/N] ")
+
+
+def cmd_post_form(api: Listam, a: argparse.Namespace) -> Any:
+    from . import posting
+
+    poster = posting.Poster(api)
+    info = poster.describe(a.category, a.type)
+    if a.template:
+        return posting.template(info)
+    if a.name:
+        if a.name not in info["fields"]:
+            raise ListamError(f"no field {a.name!r}; fields: {', '.join(info['fields'])}")
+        return {a.name: info["fields"][a.name]}
+    if not a.all:
+        for f in info["fields"].values():
+            if len(f["options"]) > 25:
+                f["options_total"] = len(f["options"])
+                f["options"] = f["options"][:25]
+    return info
+
+
+def cmd_post(api: Listam, a: argparse.Namespace) -> Any:
+    from . import posting
+
+    spec = posting.load_spec(a.spec)
+    mode = "dry-run" if a.dry_run else ("draft" if a.draft else "publish")
+    confirm = None if (a.yes or mode != "publish") else _confirm_publish
+    if confirm is not None:  # fail before uploading/previewing if nobody can answer the prompt
+        try:
+            open("/dev/tty").close()
+        except OSError:
+            raise ListamError("no terminal to confirm on; pass --yes to publish without a prompt, or use --draft") from None
+    return posting.Poster(api).post(spec, mode, confirm=confirm)
+
+
+def cmd_my(api: Listam, a: argparse.Namespace) -> Any:
+    from . import posting
+
+    ads = posting.Poster(api).my_ads(a.tab, a.page)
+    return [posting._public(ad) for ad in ads]
+
+
+def cmd_delete(api: Listam, a: argparse.Namespace) -> Any:
+    from . import posting
+
+    poster = posting.Poster(api)
+    ad = poster.find_my_ad(a.id)
+    if ad is None:
+        raise NotFound(f"ad {a.id} is not among your ads (see `listam my`)")
+    if not a.yes and not _ask(f"Permanently delete {ad['status']} ad {ad['id']} \"{ad['title']}\"? [y/N] "):
+        return {"deleted": False, "id": ad["id"], "cancelled": True}
+    poster.delete(ad)
+    return {"deleted": True, "id": ad["id"], "title": ad["title"]}
+
+
 def cmd_generations(api: Listam, a: argparse.Namespace) -> Any:
     return api.generations(a.make, a.model, a.category)
 
@@ -253,6 +363,49 @@ def build_parser() -> argparse.ArgumentParser:
     ge.add_argument("model")
     ge.add_argument("-c", "--category", type=int, default=PARTS_CATEGORY)
     ge.set_defaults(func=cmd_generations)
+    lg = sub.add_parser("login", parents=[common], help="log in to your list.am account (stores session cookies only)",
+                        description="Log in and save the session to ~/.config/listam/session.json (mode 600). "
+                        "The password is never stored. Accounts that use Google/Facebook login have no password: "
+                        "use --cookies and paste the Cookie request header from a logged-in browser instead.")
+    lg.add_argument("--user", help="phone number or email (or set LISTAM_USER)")
+    lg.add_argument("--password-stdin", action="store_true", help="read the password (or, with --cookies, the header) from stdin")
+    lg.add_argument("--cookies", action="store_true", help="import a browser session instead of using a password")
+    lg.set_defaults(func=cmd_login)
+
+    lo = sub.add_parser("logout", parents=[common], help="delete the saved session")
+    lo.set_defaults(func=cmd_logout)
+
+    wh = sub.add_parser("whoami", parents=[common], help="check whether the saved session is still logged in")
+    wh.set_defaults(func=cmd_whoami)
+
+    pf = sub.add_parser("post-form", parents=[common], help="fields a category needs for a new ad (requires login)")
+    pf.add_argument("category", type=int, help="leaf category id, e.g. 1679 (Brake Pads and Shoes)")
+    pf.add_argument("--type", help="ad type: sale, order, rent, … (default: the first one)")
+    pf.add_argument("--template", action="store_true", help="print a starter ad spec (JSON) to fill in")
+    pf.add_argument("--name", help="show only this field, with all its options")
+    pf.add_argument("--all", action="store_true", help="do not truncate long option lists")
+    pf.set_defaults(func=cmd_post_form)
+
+    po = sub.add_parser("post", parents=[common], help="post an ad from a JSON spec (requires login)",
+                        description="Validate an ad spec, upload its photos, preview it and publish it after a y/N "
+                        "confirmation. Paid promotions are never selected. Use `listam post-form CATEGORY --template` "
+                        "to get a spec skeleton. Field values may be option names or ids.")
+    po.add_argument("spec", help="path to the ad spec JSON, or - for stdin")
+    g2 = po.add_mutually_exclusive_group()
+    g2.add_argument("--draft", action="store_true", help="save as a draft instead of publishing")
+    g2.add_argument("--dry-run", action="store_true", help="validate and resolve everything, upload and submit nothing")
+    po.add_argument("--yes", action="store_true", help="publish without the confirmation prompt")
+    po.set_defaults(func=cmd_post)
+
+    my = sub.add_parser("my", parents=[common], help="list your own ads (requires login)")
+    my.add_argument("--tab", choices=["active", "drafts", "moderation", "inactive", "rejected"], default="active")
+    my.add_argument("--page", type=int, default=1)
+    my.set_defaults(func=cmd_my)
+
+    de = sub.add_parser("delete", parents=[common], help="permanently delete one of your ads or drafts (requires login)")
+    de.add_argument("id", help="ad or draft id from `listam my`")
+    de.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
+    de.set_defaults(func=cmd_delete)
     return p
 
 

@@ -437,13 +437,13 @@ def parse_top_categories(html: str) -> list[dict[str, Any]]:
 _WIDGETS = ("mu8", "si7", "dr4", "pr8")
 
 
-def parse_filters(html: str) -> dict[str, dict[str, Any]]:
+def parse_filters(html: str, selector: str = 'form[name="f"]') -> dict[str, dict[str, Any]]:
     """Discover the filter query parameters a category supports, with their options.
 
     Returns {param_name: {"label", "kind", "options": [{"value", "name", "group"}]}}.
     """
     tree = LexborHTMLParser(html)
-    form = tree.css_first('form[name="f"]')
+    form = tree.css_first(selector)
     if form is None:
         return {}
     out: dict[str, dict[str, Any]] = {}
@@ -519,3 +519,46 @@ def parse_chain(data: dict[str, Any], key: str) -> dict[str, Any]:
         else:
             items.append({"id": int(value), "name": name.strip()})
     return {"parent": parent, "items": items}
+
+
+# --------------------------------------------------------------------------- forms
+
+
+def parse_form(html: str, selector: str = "form") -> dict[str, Any] | None:
+    """Read a form the way a browser would submit it.
+
+    Returns {"action", "method", "fields": [(name, value)], "submits": {name: value},
+    "errors": [...]}; unchecked checkboxes/radios and submit buttons are left out of
+    `fields` (submits are listed separately so the caller picks one).
+    """
+    tree = LexborHTMLParser(html)
+    form = tree.css_first(selector)
+    if form is None:
+        return None
+    fields: list[tuple[str, str]] = []
+    submits: dict[str, str] = {}
+    for el in form.css("input[name], textarea[name], select[name]"):
+        a = el.attributes
+        name = a.get("name")
+        typ = (a.get("type") or "text").lower()
+        if el.tag == "textarea":
+            fields.append((name, el.text() or ""))
+        elif el.tag == "select":
+            opt = el.css_first("option[selected]") or el.css_first("option")
+            fields.append((name, (opt.attributes.get("value") or "") if opt else ""))
+        elif typ in ("submit", "button", "image"):
+            if typ == "submit":
+                submits[name] = a.get("value") or ""
+        elif typ in ("checkbox", "radio"):
+            if "checked" in a:
+                fields.append((name, a.get("value") or "on"))
+        elif typ != "file":
+            fields.append((name, a.get("value") or ""))
+    errors = [t for t in (_text(e) for e in tree.css(".err, .error, .felement_err_msg")) if t]
+    return {
+        "action": form.attributes.get("action") or "",
+        "method": (form.attributes.get("method") or "get").lower(),
+        "fields": fields,
+        "submits": submits,
+        "errors": errors,
+    }

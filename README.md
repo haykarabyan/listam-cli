@@ -7,8 +7,9 @@ A command-line interface for [list.am](https://www.list.am), Armenia's largest c
 Search any category, filter car parts by the vehicle they fit, and get listing details, photos and seller phone
 numbers as JSON.
 
-> Unofficial and not affiliated with list.am. Intended for personal, low-volume use; respect list.am's terms and
-> don't harvest seller contacts in bulk.
+> Unofficial and not affiliated with list.am. list.am's Terms of Service ask users not to "use automated programs
+> to gain access to the site", so use this at your own risk, keep usage low and personal, and don't harvest seller
+> contacts in bulk. Posting acts on your own account, which list.am could restrict.
 
 ## Install
 
@@ -94,12 +95,50 @@ to save every photo. `listam phone ID` returns just the contacts.
 | `categories [ID]` | Category tree |
 | `filters CATEGORY` | A category's filter params and option ids |
 | `makes`, `models MAKE`, `generations MAKE MODEL` | Vehicle lookups for fitment filters |
+| `login`, `logout`, `whoami` | Account session (see [Posting](#posting-your-own-ads-beta)) |
+| `post-form CATEGORY`, `post SPEC` | Describe a category's ad form; post an ad as draft or published |
+| `my`, `delete ID` | List and delete your own ads |
 
 - Output is JSON (`--format text` for a compact summary). Errors go to stderr as JSON; exit codes are `0` ok,
-  `1` error, `2` not found, `3` blocked by Cloudflare.
+  `1` error, `2` not found, `3` blocked by Cloudflare, `4` not logged in.
 - Filter values accept names or ids. Category-specific filters (`_aNN`) are listed by `listam filters <category>`.
 - Search results are tagged `regular` (real matches), `top` (paid promotion) or `similar` (suggestions).
 - `--lang en|hy|ru` switches the UI language. Run `listam <command> --help` for all options.
+
+## Posting your own ads (beta)
+
+```bash
+listam login                                   # phone/email + password; stores session cookies only
+listam post-form 1679 --template > ad.json      # starter spec for a category (1679 = Brake Pads and Shoes)
+listam post ad.json --dry-run                   # validate and resolve names to ids, submit nothing
+listam post ad.json --draft                     # save as a draft on your account
+listam post ad.json                             # upload photos, preview, confirm y/N, publish
+listam my --tab drafts                          # active | drafts | moderation | inactive | rejected
+listam delete 3858824                           # asks before deleting
+```
+
+An ad spec is JSON; values may be option names or ids:
+
+```json
+{
+  "category": 1679, "type": "sale",
+  "title": "Toyota Camry XV70 front brake pads", "description": "New, original packaging.",
+  "price": 15000, "currency": "amd", "location": "Arabkir",
+  "photos": ["front.jpg", "box.jpg"], "phone": true,
+  "part_number": "04465-33450",
+  "fits": [{"make": "toyota", "model": "camry", "generation": "xv70"}],
+  "fields": {"condition": "new", "manufacturer": "Bosch", "car_part_side": "not applicable", "car_part_position": "front"}
+}
+```
+
+- **Login**: the session is saved to `~/.config/listam/session.json` (readable only by you); the password never is.
+  If you sign in with Google/Facebook, import your browser session instead: run `copy(document.cookie)` in the
+  DevTools console on list.am, then `pbpaste | listam login --cookies --password-stdin`. Check with `listam whoami`.
+- **Safety**: paid promotions are never selected, publishing asks for confirmation (`--yes` skips it), and a
+  cancelled publish deletes the draft list.am creates during preview.
+- **Photos**: JPEG up to 16 MB, or install `listam-cli[photos]` (Pillow) to convert and resize to 1280×960.
+- **Not supported yet**: categories whose form loads fields dynamically (car listings), and editing existing ads.
+  Drafts and the preview step are tested end to end; the final publish click has not been exercised yet.
 
 ## Using with AI agents
 
@@ -118,7 +157,7 @@ list.am has no public API, so the CLI reads the same pages and endpoints the web
 impersonating Chrome with [curl_cffi](https://github.com/lexiforest/curl_cffi), spaces requests about 0.4 s apart,
 and caches filter lists in `~/.cache/listam` for 3 days.
 
-Limitations: read-only (no login, messaging or posting), sorting is limited to default/relevance, and parsers may
+Limitations: no messaging or ad editing yet, sorting is limited to default/relevance, and parsers may
 need updating when list.am changes its HTML.
 
 ## Development
